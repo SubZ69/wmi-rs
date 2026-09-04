@@ -120,7 +120,7 @@ impl WMIConnection {
         let loc = create_locator_or_init()?;
 
         let ctx = WMIContext::new()?;
-        let svc = create_services(&loc, namespace_path, None, None, None, &ctx.0)?;
+        let svc = create_services(&loc, namespace_path, None, None, &ctx.0)?;
 
         let this = Self {
             _phantom: PhantomData,
@@ -178,15 +178,20 @@ impl WMIConnection {
     /// Creates a connection to a remote computer with a default `CIMV2` namespace path.
     /// See [`IWbemLocator::ConnectServer`](https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemlocator-connectserver).
     ///
+    /// Per the `ConnectServer` docs for `strUser`:
+    ///
+    /// > If the user name is from a domain different from the current domain, the string may
+    /// > contain the domain name and user name separated by a backslash `Domain\UserName`
+    /// > You can use the user principal name (UPN) format, which is `Username@DomainName`.
+    ///
     /// # Example
     /// ```no_run
     /// # use wmi::*;
     /// # fn main() -> WMIResult<()> {
     /// let wmi_con = WMIConnection::with_credentials(
-    ///     "ServerName",         // Server name or IP address
-    ///     Some("username"),
+    ///     "ServerName",              // Server name or IP address
+    ///     Some(r"domain\username"),
     ///     Some("password"),
-    ///     Some("domain"),
     /// )?;
     /// # Ok(())
     /// # }
@@ -195,12 +200,14 @@ impl WMIConnection {
         server: &str,
         username: Option<&str>,
         password: Option<&str>,
-        domain: Option<&str>,
     ) -> WMIResult<Self> {
-        Self::with_credentials_and_namespace(server, "ROOT\\CIMV2", username, password, domain)
+        Self::with_credentials_and_namespace(server, "ROOT\\CIMV2", username, password)
     }
 
     /// Creates a connection to a remote computer with the given namespace path and credentials.
+    ///
+    /// See [`with_credentials`](Self::with_credentials) for how to specify a user from a
+    /// different domain.
     ///
     /// # Example
     /// ```no_run
@@ -209,9 +216,8 @@ impl WMIConnection {
     /// let wmi_con = WMIConnection::with_credentials_and_namespace(
     ///     "ServerName",         // Server name or IP address
     ///     "ROOT\\CIMV2",        // Namespace path
-    ///     Some("username"),
+    ///     Some(r"domain\username"),
     ///     Some("password"),
-    ///     Some("domain"),
     /// )?;
     /// # Ok(())
     /// # }
@@ -221,7 +227,6 @@ impl WMIConnection {
         namespace_path: &str,
         username: Option<&str>,
         password: Option<&str>,
-        domain: Option<&str>,
     ) -> WMIResult<Self> {
         let loc = create_locator_or_init()?;
 
@@ -229,7 +234,7 @@ impl WMIConnection {
         let full_namespace = &format!(r"\\{}\{}", server, namespace_path);
 
         let ctx = WMIContext::new()?;
-        let svc = create_services(&loc, full_namespace, username, password, domain, &ctx.0)?;
+        let svc = create_services(&loc, full_namespace, username, password, &ctx.0)?;
 
         let this = Self {
             _phantom: PhantomData,
@@ -292,14 +297,14 @@ fn create_services(
     namespace_path: &str,
     username: Option<&str>,
     password: Option<&str>,
-    authority: Option<&str>,
     ctx: &IWbemContext,
 ) -> WMIResult<IWbemServices> {
     let namespace_path = BSTR::from(namespace_path);
     let user = BSTR::from(username.unwrap_or_default());
     let password = BSTR::from(password.unwrap_or_default());
-    let authority = BSTR::from(authority.unwrap_or_default());
 
+    // `strAuthority` is left empty deliberately — see `with_credentials`'s
+    // doc comment for why (the domain belongs in `strUser` instead).
     let svc = unsafe {
         loc.ConnectServer(
             &namespace_path,
@@ -307,7 +312,7 @@ fn create_services(
             &password,
             &BSTR::new(),
             WBEM_FLAG_CONNECT_USE_MAX_WAIT.0,
-            &authority,
+            &BSTR::new(),
             ctx,
         )?
     };
@@ -346,7 +351,7 @@ mod tests {
     #[test]
     fn it_can_connect_to_localhost_without_credentials() {
         // Connect to localhost with empty credentials
-        let result = WMIConnection::with_credentials("localhost", None, None, None);
+        let result = WMIConnection::with_credentials("localhost", None, None);
 
         // The connection should succeed
         assert!(
